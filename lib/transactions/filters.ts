@@ -84,3 +84,33 @@ export function hasActiveFilters(params: TransactionQueryParams): boolean {
     params.anomaly === "1"
   );
 }
+
+export function paramsFromSearchParams(sp: URLSearchParams): TransactionQueryParams {
+  return {
+    page: sp.get("page") ?? undefined,
+    category: sp.get("category") ?? undefined,
+    merchant: sp.get("merchant") ?? undefined,
+    source: sp.get("source") ?? undefined,
+    from: sp.get("from") ?? undefined,
+    to: sp.get("to") ?? undefined,
+    recurring: sp.get("recurring") ?? undefined,
+    anomaly: sp.get("anomaly") ?? undefined,
+  };
+}
+
+export function buildTransactionsApiQuery(params: TransactionQueryParams): string {
+  const sp = new URLSearchParams();
+  if (params.page && params.page !== "1") sp.set("page", params.page);
+  if (params.category) sp.set("category", params.category);
+  if (params.merchant) sp.set("merchant", params.merchant);
+  if (params.source) sp.set("source", params.source);
+  if (params.from) sp.set("from", params.from);
+  if (params.to) sp.set("to", params.to);
+  if (params.recurring === "1") sp.set("recurring", "1");
+  if (params.anomaly === "1") sp.set("anomaly", "1");
+  return sp.toString();
+}
+
+export function paramsKey(params: TransactionQueryParams): string {
+  return buildTransactionsApiQuery(params) || "default";
+}

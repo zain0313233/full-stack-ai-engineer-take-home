@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { TRANSACTIONS_KEY } from "@/hooks/useTransactions";
 import { useDropzone } from "react-dropzone";
 import {
   Upload, FileText, CheckCircle2, AlertCircle, RefreshCw,
@@ -22,6 +24,7 @@ interface ImportResult {
 
 export default function ImportPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState<"csv" | "mock" | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -52,6 +55,7 @@ export default function ImportPage() {
         toast.error(data.error ?? "Import failed");
       } else {
         setResult({ ...data, source: "csv" });
+        void queryClient.invalidateQueries({ queryKey: [TRANSACTIONS_KEY] });
         toast.success(`Imported ${data.imported} transactions`);
       }
     } catch {
@@ -74,6 +78,7 @@ export default function ImportPage() {
         toast.info(data.message ?? "Mock bank already connected");
       } else {
         setResult({ ...data, source: "mock_bank" });
+        void queryClient.invalidateQueries({ queryKey: [TRANSACTIONS_KEY] });
         toast.success(`Connected mock bank — imported ${data.imported} transactions`);
       }
     } catch {

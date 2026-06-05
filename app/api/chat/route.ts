@@ -1,21 +1,23 @@
 import { streamText } from "ai";
 import { createGroq } from "@ai-sdk/groq";
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { requireAuth } from "@/lib/api/auth";
+import { MAX_IMAGE_BASE64_CHARS } from "@/lib/api/validation";
 import { getUserMemory } from "@/lib/db/memory";
 import { appendMessage, createChatSession, updateSessionTitle } from "@/lib/db/chat";
 import { buildSystemPrompt } from "@/lib/ai/prompts";
 import { buildPrefetchContext } from "@/lib/ai/prefetch";
 import { processReceiptUpload } from "@/lib/ai/receipt-import";
 import { receiptErrorMessage } from "@/lib/ai/receipt-vision";
+import { routeChatQuery, selectChatStrategy } from "@/lib/ai/query-router";
 import { buildTools } from "@/lib/ai/tools";
 import { formatCurrency } from "@/lib/utils/formatters";
 import { getMonthName } from "@/lib/utils/formatters";
-import { prisma } from "@/lib/db/prisma";
+import { getDataOverview } from "@/lib/db/data-overview";
 
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY! });
 const MAIN_MODEL = groq("llama-3.3-70b-versatile");
+const FAST_MODEL = groq("llama-3.1-8b-instant");
 
 const MAX_HISTORY = 6;
 
@@ -38,14 +40,28 @@ function buildReceiptPrompt(result: Awaited<ReturnType<typeof processReceiptUplo
   ].join("\n");
 }
 
+function persistUserMessage(
+  sessionId: string,
+  content: string,
+  messageMeta?: Record<string, unknown>
+) {
+  void appendMessage(sessionId, "user", content, messageMeta).catch((err) =>
+    console.error("[chat] save user message", err)
+  );
+}
+
+function persistSessionTitle(sessionId: string, userId: string, title: string) {
+  void updateSessionTitle(sessionId, userId, title).catch((err) =>
+    console.error("[chat] update title", err)
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await createClient();
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) return new Response("Unauthorized", { status: 401 });
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
 
-    const dbUser = await getUserBySupabaseId(authUser.id);
-    if (!dbUser) return new Response("User not found", { status: 404 });
+    const { dbUser } = auth.ctx;
 
     const body = await req.json();
     const {
@@ -58,7 +74,14 @@ export async function POST(req: NextRequest) {
     } = body;
     if (!messages?.length) return new Response("No messages", { status: 400 });
 
-    const userMessage: string = messages[messages.length - 1]?.content ?? "";
+    if (imageBase64 && imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
+      return NextResponse.json({ error: "Image too large (max ~5 MB)" }, { status: 413 });
+    }
+
+    const userMessage: string = String(messages[messages.length - 1]?.content ?? "").slice(
+      0,
+      4000
+    );
     const hasReceiptImage = !!imageBase64;
     const hasFileAttachment = !!attachmentDataUrl || hasReceiptImage;
 
@@ -98,55 +121,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const [userMemory, txCount, oldest, newest, recentSummaries] = await Promise.all([
-      getUserMemory(dbUser.id),
-      prisma.transaction.count({ where: { userId: dbUser.id } }),
-      prisma.transaction.findFirst({ where: { userId: dbUser.id }, orderBy: { date: "asc" }, select: { date: true } }),
-      prisma.transaction.findFirst({ where: { userId: dbUser.id }, orderBy: { date: "desc" }, select: { date: true } }),
-      prisma.spendingSummary.findMany({
-        where: { userId: dbUser.id },
-        orderBy: [{ year: "desc" }, { month: "desc" }],
-        take: 18,
-      }),
-    ]);
-
-    let dataContext = "No transactions imported yet.";
-    if (txCount > 0 && oldest && newest) {
-      const monthMap: Record<string, number> = {};
-      for (const s of recentSummaries) {
-        if (s.category === "Income") continue;
-        const k = `${s.year}-${String(s.month).padStart(2, "0")}`;
-        monthMap[k] = (monthMap[k] ?? 0) + s.total;
-      }
-      const monthList = Object.entries(monthMap)
-        .sort((a, b) => b[0].localeCompare(a[0]))
-        .map(([k, t]) => `${k}=$${Math.round(t)}`)
-        .join(", ");
-
-      const newestMonth = newest.date.getMonth() + 1;
-      const newestYear = newest.date.getFullYear();
-      const oldestMonth = oldest.date.getMonth() + 1;
-      const oldestYear = oldest.date.getFullYear();
-      const monthsOfData = (newestYear - oldestYear) * 12 + (newestMonth - oldestMonth) + 1;
-
-      dataContext = [
-        `Transactions: ${txCount}`,
-        `Data range: ${oldestYear}-${String(oldestMonth).padStart(2, "0")} → ${newestYear}-${String(newestMonth).padStart(2, "0")} (${monthsOfData} month${monthsOfData !== 1 ? "s" : ""})`,
-        `Most recent month for queries: ${newestYear}-${String(newestMonth).padStart(2, "0")}`,
-        `Monthly totals (newest first): ${monthList}`,
-      ].join("\n");
-    }
-
     const now = new Date();
-    const prefetchContext =
-      txCount > 0
-        ? await buildPrefetchContext(dbUser.id, now.getFullYear(), now.getMonth() + 1)
-        : undefined;
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const prefetchModes = routeChatQuery(userMessage);
+
+    const [userMemory, { txCount, dataContext }, prefetchContext] = await Promise.all([
+      getUserMemory(dbUser.id),
+      getDataOverview(dbUser.id),
+      hasReceiptImage
+        ? Promise.resolve(undefined)
+        : buildPrefetchContext(dbUser.id, year, month, prefetchModes),
+    ]);
 
     let systemPrompt = buildSystemPrompt({
       userMemory,
-      currentMonth: getMonthName(now.getMonth() + 1),
-      currentYear: now.getFullYear(),
+      currentMonth: getMonthName(month),
+      currentYear: year,
       dataContext,
       prefetchContext,
       hasData: txCount > 0,
@@ -156,11 +147,13 @@ export async function POST(req: NextRequest) {
       systemPrompt += `\n\n${receiptContext}`;
     }
 
-    let sessionId = incomingSessionId;
-    if (!sessionId) {
+    let sessionId = incomingSessionId as string | undefined;
+    const isNewSession = !sessionId;
+
+    if (isNewSession) {
       const session = await createChatSession(dbUser.id);
       sessionId = session.id;
-      await updateSessionTitle(
+      persistSessionTitle(
         sessionId,
         dbUser.id,
         (hasReceiptImage ? "Receipt: " : "") +
@@ -181,12 +174,11 @@ export async function POST(req: NextRequest) {
       };
     }
 
-    await appendMessage(
-      sessionId,
-      "user",
-      userMessage || (hasReceiptImage ? "Uploaded a receipt" : hasFileAttachment ? "Shared an attachment" : ""),
-      messageMeta
-    );
+    const userContent =
+      userMessage ||
+      (hasReceiptImage ? "Uploaded a receipt" : hasFileAttachment ? "Shared an attachment" : "");
+
+    persistUserMessage(sessionId!, userContent, messageMeta);
 
     const trimmed = messages.slice(-MAX_HISTORY);
     const aiMessages = trimmed.map((m: { role: string; content: string }) => ({
@@ -197,20 +189,28 @@ export async function POST(req: NextRequest) {
           : m.content,
     }));
 
+    const { useFastModel: useFast, enableTools } = selectChatStrategy(
+      userMessage,
+      prefetchModes,
+      !!prefetchContext,
+      hasReceiptImage
+    );
+    const model = useFast ? FAST_MODEL : MAIN_MODEL;
     const { search_web, save_user_memory } = buildTools(dbUser.id);
+    const tools = enableTools ? { search_web, save_user_memory } : undefined;
 
     const result = streamText({
-      model: MAIN_MODEL,
+      model,
       system: systemPrompt,
       messages: aiMessages,
-      tools: hasReceiptImage ? undefined : { search_web, save_user_memory },
-      maxSteps: 2,
+      tools,
+      maxSteps: 1,
       maxTokens: 450,
       temperature: 0,
       onFinish: async ({ text, finishReason }) => {
         if (text?.trim()) {
-          await appendMessage(sessionId, "assistant", text, {
-            model: MAIN_MODEL.modelId,
+          await appendMessage(sessionId!, "assistant", text, {
+            model: model.modelId,
             finishReason,
             receiptProcessed: hasReceiptImage,
           });
@@ -219,7 +219,7 @@ export async function POST(req: NextRequest) {
     });
 
     return result.toDataStreamResponse({
-      headers: { "X-Session-Id": sessionId },
+      headers: { "X-Session-Id": sessionId! },
       getErrorMessage: (error) => {
         console.error("[chat stream]", error);
         return "Something went wrong. Please try again.";

@@ -1,36 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { requireAuth } from "@/lib/api/auth";
+import { budgetSchema } from "@/lib/api/validation";
 import { getBudgets, upsertBudget, deleteBudget } from "@/lib/db/budgets";
-
-async function getUser() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-  return getUserBySupabaseId(user.id);
-}
+import { CATEGORIES } from "@/lib/utils/formatters";
 
 export async function GET() {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const budgets = await getBudgets(user.id);
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.response;
+
+  const budgets = await getBudgets(auth.ctx.dbUser.id);
   return NextResponse.json(budgets);
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { category, amount, period } = await req.json();
-  if (!category || !amount) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
-  const budget = await upsertBudget(user.id, category, parseFloat(amount), period ?? "monthly");
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.response;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = budgetSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid budget data" }, { status: 400 });
+  }
+
+  const budget = await upsertBudget(
+    auth.ctx.dbUser.id,
+    parsed.data.category,
+    parsed.data.amount,
+    parsed.data.period ?? "monthly"
+  );
   return NextResponse.json(budget);
 }
 
 export async function DELETE(req: NextRequest) {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.response;
+
   const category = req.nextUrl.searchParams.get("category");
-  if (!category) return NextResponse.json({ error: "Missing category" }, { status: 400 });
-  await deleteBudget(user.id, category);
+  if (!category || !CATEGORIES.includes(category as (typeof CATEGORIES)[number])) {
+    return NextResponse.json({ error: "Invalid category" }, { status: 400 });
+  }
+
+  await deleteBudget(auth.ctx.dbUser.id, category);
   return NextResponse.json({ ok: true });
 }

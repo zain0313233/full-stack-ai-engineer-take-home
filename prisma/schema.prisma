@@ -46,9 +46,13 @@ model Transaction {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId, date])
+  @@index([userId, date(sort: Desc)])
   @@index([userId, category])
+  @@index([userId, category, date(sort: Desc)])
   @@index([userId, isRecurring])
+  @@index([userId, isAnomaly, date(sort: Desc)])
+  @@index([userId, amount(sort: Desc)])
+  @@index([userId, source])
   @@map("transactions")
 }
 
@@ -99,7 +103,7 @@ model ChatSession {
   user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages ChatMessage[]
 
-  @@index([userId])
+  @@index([userId, updatedAt(sort: Desc)])
   @@map("chat_sessions")
 }
 

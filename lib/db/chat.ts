@@ -5,7 +5,12 @@ export async function getChatSessions(userId: string) {
     where: { userId },
     orderBy: { updatedAt: "desc" },
     take: 30,
-    include: { _count: { select: { messages: true } } },
+    select: {
+      id: true,
+      title: true,
+      updatedAt: true,
+      createdAt: true,
+    },
   });
 }
 

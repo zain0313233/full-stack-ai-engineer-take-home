@@ -1,18 +1,13 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { requireAuth } from "@/lib/api/auth";
 import { getMockBankFeed } from "@/lib/mock-bank/feed";
 import type { ParsedTransaction } from "@/lib/utils/csv-parser";
 import { importTransactionsForUser } from "@/lib/utils/import-pipeline";
 
 export async function POST() {
   try {
-    const supabase = await createClient();
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    const dbUser = await getUserBySupabaseId(authUser.id);
-    if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
 
     const feed = getMockBankFeed();
     const transactions: ParsedTransaction[] = feed.transactions.map((tx) => ({
@@ -25,7 +20,7 @@ export async function POST() {
       rawData: { accountId: feed.account.id, importedFrom: "mock_bank" },
     }));
 
-    const result = await importTransactionsForUser(dbUser.id, transactions);
+    const result = await importTransactionsForUser(auth.ctx.dbUser.id, transactions);
 
     if (result.imported === 0 && result.skipped > 0) {
       return NextResponse.json({

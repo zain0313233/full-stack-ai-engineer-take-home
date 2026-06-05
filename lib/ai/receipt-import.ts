@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { invalidateDataOverview } from "@/lib/db/data-overview";
 import { incrementSpendingSummary } from "@/lib/db/transactions";
 import { extractReceiptFromImage } from "@/lib/ai/receipt-vision";
 import { uploadUserFile } from "@/lib/storage/bucket";
@@ -92,6 +93,8 @@ export async function processReceiptUpload(
     withFlags.category,
     withFlags.amount
   );
+
+  invalidateDataOverview(userId);
 
   return {
     imported: true,

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { invalidateDataOverview } from "@/lib/db/data-overview";
 import { createTransactionsBatch, upsertSpendingSummary } from "@/lib/db/transactions";
 import type { ParsedTransaction } from "@/lib/utils/csv-parser";
 import { detectAnomalies, detectRecurring } from "@/lib/utils/transaction-analysis";
@@ -66,6 +67,8 @@ export async function importTransactionsForUser(
       return upsertSpendingSummary(userId, parseInt(year), parseInt(month), category, total, count);
     })
   );
+
+  invalidateDataOverview(userId);
 
   return {
     imported: withAnomalies.length,

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ensureDbUser } from "@/lib/db/users";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { QueryProvider } from "@/components/providers/QueryProvider";
 
 export default async function Layout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -23,5 +24,9 @@ export default async function Layout({ children }: { children: React.ReactNode }
     email: user.email,
   };
 
-  return <DashboardLayout user={profile}>{children}</DashboardLayout>;
+  return (
+    <QueryProvider>
+      <DashboardLayout user={profile}>{children}</DashboardLayout>
+    </QueryProvider>
+  );
 }

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChat, type Message } from "ai/react";
 import { ChatMessage, type MessageAttachment } from "./ChatMessage";
 import { ChatInput, type PendingAttachment } from "./ChatInput";
 import { TrendingUp, Sparkles, Plus, MessageSquare, Trash2, Menu, X } from "lucide-react";
 import { toast } from "sonner";
+import { useChatSessions, type ChatSession } from "@/hooks/useChatSessions";
 
 const STARTER_PROMPTS = [
   "How much did I spend last month?",
@@ -16,24 +17,17 @@ const STARTER_PROMPTS = [
   "Where can I cut back on spending?",
 ];
 
-interface Session {
-  id: string;
-  title: string | null;
-  updatedAt: string | Date;
-  _count: { messages: number };
-}
-
 interface Props {
-  initialSessions: Session[];
+  initialSessions: ChatSession[];
 }
 
-function groupSessionsByDate(sessions: Session[]) {
+function groupSessionsByDate(sessions: ChatSession[]) {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today.getTime() - 86400000);
   const weekAgo = new Date(today.getTime() - 7 * 86400000);
 
-  const groups: Record<string, Session[]> = {
+  const groups: Record<string, ChatSession[]> = {
     Today: [],
     Yesterday: [],
     "This Week": [],
@@ -85,23 +79,13 @@ function attachmentsFromMetadata(metadata: unknown): MessageAttachment[] | undef
 }
 
 export function ChatInterface({ initialSessions }: Props) {
-  const [sessions, setSessions] = useState<Session[]>(initialSessions);
+  const { sessions, invalidate, upsertSession, removeSession } =
+    useChatSessions(initialSessions);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  const refreshSessions = useCallback(async () => {
-    try {
-      const res = await fetch("/api/chat/sessions");
-      if (!res.ok) return;
-      const data = await res.json();
-      setSessions(data.sessions ?? []);
-    } catch {
-      // non-blocking
-    }
-  }, []);
 
   const { messages, append, isLoading, setMessages } = useChat({
     api: "/api/chat",
@@ -119,9 +103,14 @@ export function ChatInterface({ initialSessions }: Props) {
         return;
       }
       const newSessionId = res.headers.get("X-Session-Id");
-      if (newSessionId) {
+      if (newSessionId && newSessionId !== activeSessionId) {
         setActiveSessionId(newSessionId);
-        void refreshSessions();
+        const lastUser = messages[messages.length - 1];
+        upsertSession({
+          id: newSessionId,
+          title: lastUser?.content?.slice(0, 50) || "New conversation",
+          updatedAt: new Date().toISOString(),
+        });
       }
     },
     onError: (err) => {
@@ -133,7 +122,7 @@ export function ChatInterface({ initialSessions }: Props) {
         toast.error("Something went wrong. Please try again.");
         setMessages((prev) => prev.filter((m) => m.id !== message.id || !isFailedAssistantMessage(m.content)));
       } else {
-        void refreshSessions();
+        invalidate();
       }
     },
   });
@@ -178,13 +167,7 @@ export function ChatInterface({ initialSessions }: Props) {
 
   const handleDeleteSession = async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/chat/sessions/${sessionId}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Could not delete this chat");
-        return;
-      }
-
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      await removeSession.mutateAsync(sessionId);
       toast.success("Chat deleted");
 
       if (activeSessionId === sessionId) {
@@ -192,7 +175,7 @@ export function ChatInterface({ initialSessions }: Props) {
         setMessages([]);
       }
     } catch {
-      toast.error("Something went wrong. Please try again.");
+      toast.error("Could not delete this chat");
     }
   };
 

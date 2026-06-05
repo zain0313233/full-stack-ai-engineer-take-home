@@ -1,18 +1,13 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { requireAuth } from "@/lib/api/auth";
 import { getChatSessions } from "@/lib/db/chat";
 
 export async function GET() {
   try {
-    const supabase = await createClient();
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
 
-    const dbUser = await getUserBySupabaseId(authUser.id);
-    if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-
-    const sessions = await getChatSessions(dbUser.id);
+    const sessions = await getChatSessions(auth.ctx.dbUser.id);
     return NextResponse.json({ sessions });
   } catch (err) {
     console.error("[chat/sessions]", err);
