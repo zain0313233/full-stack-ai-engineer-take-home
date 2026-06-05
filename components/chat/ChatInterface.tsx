@@ -85,9 +85,17 @@ export function ChatInterface({ initialSessions }: Props) {
       imageBase64: imageQueue?.base64,
       imageMimeType: imageQueue?.mimeType,
     },
-    onResponse: (res) => {
+    onResponse: async (res) => {
       if (!res.ok) {
-        toast.error("Something went wrong. Please try again.");
+        let message = "Something went wrong. Please try again.";
+        try {
+          const data = await res.clone().json();
+          if (typeof data?.error === "string") message = data.error;
+        } catch {
+          // non-JSON error body
+        }
+        toast.error(message);
+        setImageQueue(null);
         return;
       }
       const newSessionId = res.headers.get("X-Session-Id");

@@ -1,4 +1,4 @@
-import { streamText, type CoreMessage } from "ai";
+import { streamText } from "ai";
 import { createGroq } from "@ai-sdk/groq";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -7,16 +7,36 @@ import { getUserMemory } from "@/lib/db/memory";
 import { appendMessage, createChatSession, updateSessionTitle } from "@/lib/db/chat";
 import { buildSystemPrompt } from "@/lib/ai/prompts";
 import { buildPrefetchContext } from "@/lib/ai/prefetch";
+import { processReceiptUpload } from "@/lib/ai/receipt-import";
+import { receiptErrorMessage } from "@/lib/ai/receipt-vision";
 import { buildTools } from "@/lib/ai/tools";
+import { formatCurrency } from "@/lib/utils/formatters";
 import { getMonthName } from "@/lib/utils/formatters";
 import { prisma } from "@/lib/db/prisma";
 
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY! });
-const MAIN_MODEL   = groq("llama-3.3-70b-versatile");
-const VISION_MODEL = groq("meta-llama/llama-4-scout-17b-16e-instruct");
+const MAIN_MODEL = groq("llama-3.3-70b-versatile");
 
-// Keep last N messages to stay inside free-tier 6k TPM
 const MAX_HISTORY = 6;
+
+function buildReceiptPrompt(result: Awaited<ReturnType<typeof processReceiptUpload>>) {
+  if (result.skipped) {
+    return [
+      "## Receipt just processed",
+      `Gemini read the receipt: ${result.merchant}, ${formatCurrency(result.amount)}, ${result.date}, ${result.category}.`,
+      "This expense is already in the user's account (duplicate). Tell them politely — do not claim it was logged again.",
+      result.imageUrl ? `Receipt image URL: ${result.imageUrl}` : "",
+    ].join("\n");
+  }
+
+  return [
+    "## Receipt just processed",
+    `Gemini read the receipt and it was SAVED as a transaction.`,
+    `Merchant: ${result.merchant} | Amount: ${formatCurrency(result.amount)} | Date: ${result.date} | Category: ${result.category}`,
+    result.imageUrl ? `Receipt image stored at: ${result.imageUrl} (URL only in DB, not the image bytes)` : "",
+    "Confirm the logged expense warmly in 2-3 sentences. Mention it is now in their transactions.",
+  ].join("\n");
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -32,9 +52,37 @@ export async function POST(req: NextRequest) {
     if (!messages?.length) return new Response("No messages", { status: 400 });
 
     const userMessage: string = messages[messages.length - 1]?.content ?? "";
-    const isVision = !!imageBase64;
+    const hasReceiptImage = !!imageBase64;
 
-    // ── Pre-fetch context in parallel (no extra AI call needed) ─────────────
+    let receiptContext = "";
+    let receiptMeta: Record<string, unknown> | undefined;
+
+    if (hasReceiptImage) {
+      try {
+        const receiptResult = await processReceiptUpload(
+          dbUser.id,
+          imageBase64,
+          imageMimeType ?? "image/jpeg",
+          userMessage || undefined
+        );
+        receiptContext = buildReceiptPrompt(receiptResult);
+        receiptMeta = {
+          hasImage: true,
+          imageUrl: receiptResult.imageUrl,
+          receipt: {
+            merchant: receiptResult.merchant,
+            amount: receiptResult.amount,
+            date: receiptResult.date,
+            category: receiptResult.category,
+            imported: receiptResult.imported,
+          },
+        };
+      } catch (err) {
+        console.error("[chat receipt]", err);
+        return NextResponse.json({ error: receiptErrorMessage(err) }, { status: 422 });
+      }
+    }
+
     const [userMemory, txCount, oldest, newest, recentSummaries] = await Promise.all([
       getUserMemory(dbUser.id),
       prisma.transaction.count({ where: { userId: dbUser.id } }),
@@ -47,13 +95,12 @@ export async function POST(req: NextRequest) {
       }),
     ]);
 
-    // Build compact data context injected into the system prompt
     let dataContext = "No transactions imported yet.";
     if (txCount > 0 && oldest && newest) {
       const monthMap: Record<string, number> = {};
       for (const s of recentSummaries) {
         if (s.category === "Income") continue;
-        const k = `${s.year}-${String(s.month).padStart(2,"0")}`;
+        const k = `${s.year}-${String(s.month).padStart(2, "0")}`;
         monthMap[k] = (monthMap[k] ?? 0) + s.total;
       }
       const monthList = Object.entries(monthMap)
@@ -61,16 +108,16 @@ export async function POST(req: NextRequest) {
         .map(([k, t]) => `${k}=$${Math.round(t)}`)
         .join(", ");
 
-      const newestMonth  = newest.date.getMonth() + 1;
-      const newestYear   = newest.date.getFullYear();
-      const oldestMonth  = oldest.date.getMonth() + 1;
-      const oldestYear   = oldest.date.getFullYear();
+      const newestMonth = newest.date.getMonth() + 1;
+      const newestYear = newest.date.getFullYear();
+      const oldestMonth = oldest.date.getMonth() + 1;
+      const oldestYear = oldest.date.getFullYear();
       const monthsOfData = (newestYear - oldestYear) * 12 + (newestMonth - oldestMonth) + 1;
 
       dataContext = [
         `Transactions: ${txCount}`,
-        `Data range: ${oldestYear}-${String(oldestMonth).padStart(2,"0")} → ${newestYear}-${String(newestMonth).padStart(2,"0")} (${monthsOfData} month${monthsOfData !== 1 ? "s" : ""})`,
-        `Most recent month for queries: ${newestYear}-${String(newestMonth).padStart(2,"0")}`,
+        `Data range: ${oldestYear}-${String(oldestMonth).padStart(2, "0")} → ${newestYear}-${String(newestMonth).padStart(2, "0")} (${monthsOfData} month${monthsOfData !== 1 ? "s" : ""})`,
+        `Most recent month for queries: ${newestYear}-${String(newestMonth).padStart(2, "0")}`,
         `Monthly totals (newest first): ${monthList}`,
       ].join("\n");
     }
@@ -81,7 +128,7 @@ export async function POST(req: NextRequest) {
         ? await buildPrefetchContext(dbUser.id, now.getFullYear(), now.getMonth() + 1)
         : undefined;
 
-    const systemPrompt = buildSystemPrompt({
+    let systemPrompt = buildSystemPrompt({
       userMemory,
       currentMonth: getMonthName(now.getMonth() + 1),
       currentYear: now.getFullYear(),
@@ -90,51 +137,56 @@ export async function POST(req: NextRequest) {
       hasData: txCount > 0,
     });
 
-    // ── Session management ───────────────────────────────────────────────────
+    if (receiptContext) {
+      systemPrompt += `\n\n${receiptContext}`;
+    }
+
     let sessionId = incomingSessionId;
     if (!sessionId) {
       const session = await createChatSession(dbUser.id);
       sessionId = session.id;
-      await updateSessionTitle(sessionId, dbUser.id,
-        userMessage.slice(0, 60) + (userMessage.length > 60 ? "…" : ""));
+      await updateSessionTitle(
+        sessionId,
+        dbUser.id,
+        (hasReceiptImage ? "Receipt: " : "") +
+          userMessage.slice(0, 50) +
+          (userMessage.length > 50 ? "…" : "")
+      );
     }
-    await appendMessage(sessionId, "user", userMessage,
-      isVision ? { hasImage: true } : undefined);
 
-    // ── Trim history ─────────────────────────────────────────────────────────
+    await appendMessage(
+      sessionId,
+      "user",
+      userMessage || (hasReceiptImage ? "Uploaded a receipt" : ""),
+      receiptMeta ?? (hasReceiptImage ? { hasImage: true } : undefined)
+    );
+
     const trimmed = messages.slice(-MAX_HISTORY);
+    const aiMessages = trimmed.map((m: { role: string; content: string }) => ({
+      role: m.role as "user" | "assistant",
+      content:
+        hasReceiptImage && m === trimmed[trimmed.length - 1]
+          ? m.content || "I uploaded a receipt — please confirm what you logged."
+          : m.content,
+    }));
 
-    const aiMessages: CoreMessage[] = trimmed.map((m: { role: string; content: string }, idx: number) => {
-      if (isVision && idx === trimmed.length - 1 && imageBase64) {
-        return {
-          role: "user",
-          content: [
-            { type: "text", text: m.content || "Read this receipt and log it as an expense." },
-            { type: "image", image: imageBase64, mimeType: imageMimeType ?? "image/jpeg" },
-          ],
-        };
-      }
-      return { role: m.role as "user" | "assistant", content: m.content };
-    });
-
-    // ── Stream ───────────────────────────────────────────────────────────────
-    const model = isVision ? VISION_MODEL : MAIN_MODEL;
-    // Only lightweight tools — subscriptions/budgets/spending are pre-fetched to avoid
-    // Groq multi-step tool-call failures on the free tier.
     const { search_web, save_user_memory } = buildTools(dbUser.id);
-    const lightTools = { search_web, save_user_memory };
 
     const result = streamText({
-      model,
+      model: MAIN_MODEL,
       system: systemPrompt,
       messages: aiMessages,
-      tools: isVision ? undefined : lightTools,
+      tools: hasReceiptImage ? undefined : { search_web, save_user_memory },
       maxSteps: 2,
       maxTokens: 450,
       temperature: 0,
       onFinish: async ({ text, finishReason }) => {
         if (text?.trim()) {
-          await appendMessage(sessionId, "assistant", text, { model: model.modelId, finishReason });
+          await appendMessage(sessionId, "assistant", text, {
+            model: MAIN_MODEL.modelId,
+            finishReason,
+            receiptProcessed: hasReceiptImage,
+          });
         }
       },
     });

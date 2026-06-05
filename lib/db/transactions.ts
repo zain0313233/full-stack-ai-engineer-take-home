@@ -65,6 +65,29 @@ export async function upsertSpendingSummary(
   });
 }
 
+export async function incrementSpendingSummary(
+  userId: string,
+  year: number,
+  month: number,
+  category: string,
+  amount: number
+) {
+  const existing = await prisma.spendingSummary.findUnique({
+    where: { userId_year_month_category: { userId, year, month, category } },
+  });
+
+  if (!existing) {
+    return prisma.spendingSummary.create({
+      data: { userId, year, month, category, total: amount, count: 1 },
+    });
+  }
+
+  return prisma.spendingSummary.update({
+    where: { userId_year_month_category: { userId, year, month, category } },
+    data: { total: existing.total + amount, count: existing.count + 1 },
+  });
+}
+
 export async function getSpendingSummaries(
   userId: string,
   year?: number,

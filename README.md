@@ -71,7 +71,7 @@ Open [http://localhost:3000](http://localhost:3000).
 | Recurring subscription detection | ✅ Full | Merchant + amount consistency across months |
 | Anomaly flagging | ✅ Full | Z-score > 2.5 vs category baseline |
 | Budget tracking with alerts | ✅ Full | Per-category limits, over-budget warnings |
-| Receipt photo reading | ✅ Full | Groq vision model (llama-4-scout) |
+| Receipt photo reading + expense logging | ✅ Full | Gemini Flash vision → Supabase bucket URL in DB → Groq confirms |
 | Unknown charge lookup | ✅ Full | Tavily web search tool |
 | User memory ("I get paid on the 1st") | ✅ Full | Persisted to DB, injected into every prompt |
 | Plain English summaries | ✅ Full | Engaging, conversational responses |
@@ -185,7 +185,8 @@ user_memory         — Key-value store for persistent user context
 | Framework | Next.js 15 App Router | Full-stack in one repo, RSC for fast data fetching |
 | Auth | Supabase Auth | Multi-user out of the box, 10-min setup |
 | Database | Neon Postgres + Prisma | Type-safe queries, migrations, serverless-friendly |
-| AI | Groq (llama-3.3-70b + llama-4-scout) | Fastest inference available, free tier adequate for demo |
+| AI (text) | Groq llama-3.3-70b | Fast chat, pre-fetched data avoids tool-call failures |
+| AI (receipt vision) | Gemini 2.0 Flash | Proven in our stack; Groq kept for text only |
 | AI SDK | Vercel AI SDK v4 | Streaming, tool calling, `useChat` hook |
 | Web Search | Tavily | Already in stack, purpose-built for AI agents |
 | Storage | Supabase Storage | Raw CSV archive per user |
