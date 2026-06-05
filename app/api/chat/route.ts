@@ -48,14 +48,22 @@ export async function POST(req: NextRequest) {
     if (!dbUser) return new Response("User not found", { status: 404 });
 
     const body = await req.json();
-    const { messages, sessionId: incomingSessionId, imageBase64, imageMimeType } = body;
+    const {
+      messages,
+      sessionId: incomingSessionId,
+      imageBase64,
+      imageMimeType,
+      attachmentName,
+      attachmentDataUrl,
+    } = body;
     if (!messages?.length) return new Response("No messages", { status: 400 });
 
     const userMessage: string = messages[messages.length - 1]?.content ?? "";
     const hasReceiptImage = !!imageBase64;
+    const hasFileAttachment = !!attachmentDataUrl || hasReceiptImage;
 
     let receiptContext = "";
-    let receiptMeta: Record<string, unknown> | undefined;
+    let messageMeta: Record<string, unknown> | undefined;
 
     if (hasReceiptImage) {
       try {
@@ -66,9 +74,16 @@ export async function POST(req: NextRequest) {
           userMessage || undefined
         );
         receiptContext = buildReceiptPrompt(receiptResult);
-        receiptMeta = {
+        messageMeta = {
           hasImage: true,
           imageUrl: receiptResult.imageUrl,
+          attachments: [
+            {
+              url: receiptResult.imageUrl,
+              contentType: imageMimeType ?? "image/jpeg",
+              name: attachmentName ?? "receipt",
+            },
+          ],
           receipt: {
             merchant: receiptResult.merchant,
             amount: receiptResult.amount,
@@ -154,11 +169,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (!messageMeta && hasFileAttachment && attachmentDataUrl) {
+      messageMeta = {
+        attachments: [
+          {
+            url: attachmentDataUrl,
+            contentType: imageMimeType ?? "application/octet-stream",
+            name: attachmentName ?? "attachment",
+          },
+        ],
+      };
+    }
+
     await appendMessage(
       sessionId,
       "user",
-      userMessage || (hasReceiptImage ? "Uploaded a receipt" : ""),
-      receiptMeta ?? (hasReceiptImage ? { hasImage: true } : undefined)
+      userMessage || (hasReceiptImage ? "Uploaded a receipt" : hasFileAttachment ? "Shared an attachment" : ""),
+      messageMeta
     );
 
     const trimmed = messages.slice(-MAX_HISTORY);

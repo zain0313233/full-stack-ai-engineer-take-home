@@ -1,41 +1,55 @@
 "use client";
 
 import { useRef, useState, KeyboardEvent } from "react";
-import { Send, Paperclip, X, Image as ImageIcon } from "lucide-react";
+import { Send, Paperclip, X, FileText } from "lucide-react";
+
+export interface PendingAttachment {
+  url: string;
+  contentType: string;
+  name: string;
+  base64?: string;
+}
 
 interface Props {
-  onSend: (text: string, imageBase64?: string, imageMimeType?: string) => void;
+  onSend: (text: string, attachment?: PendingAttachment) => void;
   disabled?: boolean;
 }
 
 export function ChatInput({ onSend, disabled }: Props) {
   const [text, setText] = useState("");
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const [imageMimeType, setImageMimeType] = useState<string>("image/jpeg");
+  const [attachment, setAttachment] = useState<PendingAttachment | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const clearAttachment = () => {
+    setAttachment(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
   const handleFile = (file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    setImageMimeType(file.type);
     const reader = new FileReader();
     reader.onload = (e) => {
       const result = e.target?.result as string;
-      setImagePreview(result);
-      // Strip the data URL prefix for the API
-      setImageBase64(result.split(",")[1]);
+      const isImage = file.type.startsWith("image/");
+      setAttachment({
+        url: result,
+        contentType: file.type || (isImage ? "image/jpeg" : "application/octet-stream"),
+        name: file.name,
+        base64: isImage ? result.split(",")[1] : undefined,
+      });
     };
     reader.readAsDataURL(file);
   };
 
   const handleSend = () => {
     const trimmed = text.trim();
-    if (!trimmed && !imageBase64) return;
-    onSend(trimmed || "Please read this receipt.", imageBase64 ?? undefined, imageMimeType);
+    if (!trimmed && !attachment) return;
+    const defaultText = attachment?.contentType.startsWith("image/")
+      ? "Please read this receipt."
+      : `Shared file: ${attachment?.name ?? "document"}`;
+    onSend(trimmed || defaultText, attachment ?? undefined);
     setText("");
-    setImagePreview(null);
-    setImageBase64(null);
+    clearAttachment();
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -60,17 +74,26 @@ export function ChatInput({ onSend, disabled }: Props) {
       className="p-3 rounded-2xl"
       style={{ background: "var(--fin-card)", border: "1px solid var(--fin-border-2)" }}
     >
-      {/* Image preview */}
-      {imagePreview && (
+      {attachment && (
         <div className="relative mb-2 inline-block">
-          <img
-            src={imagePreview}
-            alt="Receipt preview"
-            className="h-20 rounded-xl object-cover"
-            style={{ border: "1px solid var(--fin-border-2)" }}
-          />
+          {attachment.contentType.startsWith("image/") ? (
+            <img
+              src={attachment.url}
+              alt={attachment.name}
+              className="h-20 rounded-xl object-cover"
+              style={{ border: "1px solid var(--fin-border-2)" }}
+            />
+          ) : (
+            <div
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs"
+              style={{ background: "var(--fin-card-2)", border: "1px solid var(--fin-border-2)", color: "var(--fin-text)" }}
+            >
+              <FileText className="w-4 h-4" style={{ color: "var(--fin-accent)" }} />
+              <span className="truncate max-w-[200px]">{attachment.name}</span>
+            </div>
+          )}
           <button
-            onClick={() => { setImagePreview(null); setImageBase64(null); }}
+            onClick={clearAttachment}
             className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center"
             style={{ background: "var(--fin-red)", color: "#fff" }}
           >
@@ -88,14 +111,14 @@ export function ChatInput({ onSend, disabled }: Props) {
           style={{ color: "var(--fin-muted)" }}
           onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--fin-accent)")}
           onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--fin-muted)")}
-          title="Upload receipt image"
+          title="Attach image or document"
         >
           <Paperclip className="w-5 h-5" />
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.pdf,.doc,.docx,.txt,.csv"
           className="hidden"
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
         />
@@ -107,7 +130,7 @@ export function ChatInput({ onSend, disabled }: Props) {
           onChange={(e) => setText(e.target.value)}
           onInput={handleTextareaInput}
           onKeyDown={handleKeyDown}
-          placeholder={imageBase64 ? "Add a note about this receipt…" : "Ask about your finances…"}
+          placeholder={attachment ? "Add a note…" : "Ask about your finances…"}
           rows={1}
           disabled={disabled}
           className="flex-1 resize-none bg-transparent outline-none text-sm leading-relaxed disabled:opacity-50"
@@ -118,7 +141,7 @@ export function ChatInput({ onSend, disabled }: Props) {
         <button
           type="button"
           onClick={handleSend}
-          disabled={disabled || (!text.trim() && !imageBase64)}
+          disabled={disabled || (!text.trim() && !attachment)}
           className="p-2.5 rounded-xl flex-shrink-0 transition-all disabled:opacity-40"
           style={{ background: "var(--fin-accent)", color: "#fff" }}
         >
@@ -127,7 +150,7 @@ export function ChatInput({ onSend, disabled }: Props) {
       </div>
 
       <p className="text-[11px] mt-1.5 text-center" style={{ color: "var(--fin-text-3)" }}>
-        Enter to send · Shift+Enter for new line · 📎 attach receipt photos
+        Enter to send · Shift+Enter for new line · 📎 attach images or documents
       </p>
     </div>
   );

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChat, type Message } from "ai/react";
-import { ChatMessage } from "./ChatMessage";
-import { ChatInput } from "./ChatInput";
+import { ChatMessage, type MessageAttachment } from "./ChatMessage";
+import { ChatInput, type PendingAttachment } from "./ChatInput";
 import { TrendingUp, Sparkles, Plus, MessageSquare, Trash2, Menu, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -58,13 +58,38 @@ function isFailedAssistantMessage(content: string) {
   return !trimmed || trimmed === "An error occurred.";
 }
 
+function attachmentsFromMessage(m: Message): MessageAttachment[] | undefined {
+  if (m.experimental_attachments?.length) {
+    return m.experimental_attachments.map((a) => ({
+      url: a.url,
+      contentType: a.contentType,
+      name: a.name,
+    }));
+  }
+  return undefined;
+}
+
+function attachmentsFromMetadata(metadata: unknown): MessageAttachment[] | undefined {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const meta = metadata as {
+    attachments?: MessageAttachment[];
+    imageUrl?: string;
+    hasImage?: boolean;
+  };
+
+  if (meta.attachments?.length) return meta.attachments;
+  if (meta.imageUrl) {
+    return [{ url: meta.imageUrl, contentType: "image/jpeg", name: "receipt" }];
+  }
+  return undefined;
+}
+
 export function ChatInterface({ initialSessions }: Props) {
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [imageQueue, setImageQueue] = useState<{ base64: string; mimeType: string; preview: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -80,11 +105,7 @@ export function ChatInterface({ initialSessions }: Props) {
 
   const { messages, append, isLoading, setMessages } = useChat({
     api: "/api/chat",
-    body: {
-      sessionId: activeSessionId,
-      imageBase64: imageQueue?.base64,
-      imageMimeType: imageQueue?.mimeType,
-    },
+    body: { sessionId: activeSessionId },
     onResponse: async (res) => {
       if (!res.ok) {
         let message = "Something went wrong. Please try again.";
@@ -95,7 +116,6 @@ export function ChatInterface({ initialSessions }: Props) {
           // non-JSON error body
         }
         toast.error(message);
-        setImageQueue(null);
         return;
       }
       const newSessionId = res.headers.get("X-Session-Id");
@@ -103,7 +123,6 @@ export function ChatInterface({ initialSessions }: Props) {
         setActiveSessionId(newSessionId);
         void refreshSessions();
       }
-      setImageQueue(null);
     },
     onError: (err) => {
       console.error("[chat]", err);
@@ -139,11 +158,15 @@ export function ChatInterface({ initialSessions }: Props) {
       }
 
       const loaded: Message[] = (data.session?.messages ?? []).map(
-        (m: { id: string; role: string; content: string }) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })
+        (m: { id: string; role: string; content: string; metadata?: unknown }) => {
+          const attachments = attachmentsFromMetadata(m.metadata);
+          return {
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            experimental_attachments: attachments,
+          };
+        }
       );
       setMessages(loaded);
     } catch {
@@ -173,17 +196,31 @@ export function ChatInterface({ initialSessions }: Props) {
     }
   };
 
-  const handleSend = async (text: string, base64?: string, mimeType?: string) => {
-    if (base64 && mimeType) {
-      setImageQueue({ base64, mimeType, preview: `data:${mimeType};base64,${base64}` });
-    }
-    await append({ role: "user", content: text });
+  const handleSend = async (text: string, attachment?: PendingAttachment) => {
+    const messageAttachments: MessageAttachment[] | undefined = attachment
+      ? [{ url: attachment.url, contentType: attachment.contentType, name: attachment.name }]
+      : undefined;
+
+    await append(
+      {
+        role: "user",
+        content: text,
+        experimental_attachments: messageAttachments,
+      },
+      {
+        body: {
+          imageBase64: attachment?.base64,
+          imageMimeType: attachment?.contentType,
+          attachmentName: attachment?.name,
+          attachmentDataUrl: attachment && !attachment.base64 ? attachment.url : undefined,
+        },
+      }
+    );
   };
 
   const handleNewChat = () => {
     setMessages([]);
     setActiveSessionId(null);
-    setImageQueue(null);
     setSidebarOpen(false);
   };
 
@@ -363,6 +400,7 @@ export function ChatInterface({ initialSessions }: Props) {
                     key={m.id ?? i}
                     role={m.role as "user" | "assistant"}
                     content={m.content}
+                    attachments={attachmentsFromMessage(m)}
                   />
                 ))}
 

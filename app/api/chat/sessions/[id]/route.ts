@@ -28,6 +28,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
           role: m.role,
           content: m.content,
           createdAt: m.createdAt,
+          metadata: m.metadata,
         })),
       },
     });
