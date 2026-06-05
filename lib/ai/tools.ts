@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { getSpendingSummaries, getTransactions, getRecurringTransactions, getAnomalousTransactions } from "@/lib/db/transactions";
+import { getSpendingSummaries, getTransactions, getAnomalousTransactions } from "@/lib/db/transactions";
 import { getBudgets } from "@/lib/db/budgets";
 import { setUserMemory } from "@/lib/db/memory";
 import { formatCurrency, formatDate } from "@/lib/utils/formatters";
@@ -135,21 +135,16 @@ export function buildTools(userId: string) {
     }),
 
     get_recurring_subscriptions: tool({
-      description: "List recurring/subscription charges.",
+      description: "List recurring/subscription charges (Subscriptions category only).",
       parameters: z.object({}),
       execute: async () => {
-        let recurring = await getRecurringTransactions(userId);
+        const recurring = await prisma.transaction.findMany({
+          where: { userId, category: { equals: "Subscriptions", mode: "insensitive" } },
+          orderBy: { date: "desc" },
+          take: 30,
+        });
 
-        // Fallback for short history: subscription-category merchants still matter
-        if (recurring.length === 0) {
-          recurring = await prisma.transaction.findMany({
-            where: { userId, category: { equals: "Subscriptions", mode: "insensitive" } },
-            orderBy: { date: "desc" },
-            take: 20,
-          });
-        }
-
-        if (recurring.length === 0) return "No recurring charges detected.";
+        if (recurring.length === 0) return "No subscription charges detected.";
 
         // Group by merchant, pick latest
         const byMerchant: Record<string, typeof recurring[0]> = {};
