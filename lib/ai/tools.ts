@@ -138,7 +138,17 @@ export function buildTools(userId: string) {
       description: "List recurring/subscription charges.",
       parameters: z.object({}),
       execute: async () => {
-        const recurring = await getRecurringTransactions(userId);
+        let recurring = await getRecurringTransactions(userId);
+
+        // Fallback for short history: subscription-category merchants still matter
+        if (recurring.length === 0) {
+          recurring = await prisma.transaction.findMany({
+            where: { userId, category: { equals: "Subscriptions", mode: "insensitive" } },
+            orderBy: { date: "desc" },
+            take: 20,
+          });
+        }
+
         if (recurring.length === 0) return "No recurring charges detected.";
 
         // Group by merchant, pick latest

@@ -38,7 +38,21 @@ export async function appendMessage(
   content: string,
   metadata?: object
 ) {
-  return prisma.chatMessage.create({
-    data: { sessionId, role, content, metadata },
+  const [message] = await prisma.$transaction([
+    prisma.chatMessage.create({
+      data: { sessionId, role, content, metadata },
+    }),
+    prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { updatedAt: new Date() },
+    }),
+  ]);
+  return message;
+}
+
+export async function getChatSession(userId: string, sessionId: string) {
+  return prisma.chatSession.findFirst({
+    where: { id: sessionId, userId },
+    include: { messages: { orderBy: { createdAt: "asc" } } },
   });
 }

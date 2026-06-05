@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { ensureDbUser } from "@/lib/db/users";
 import { getChatSessions } from "@/lib/db/chat";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 
@@ -9,8 +9,11 @@ export default async function ChatPage() {
   const { data: { user: authUser } } = await supabase.auth.getUser();
   if (!authUser) redirect("/login");
 
-  const dbUser = await getUserBySupabaseId(authUser.id);
-  if (!dbUser) redirect("/login");
+  const dbUser = await ensureDbUser(
+    authUser.id,
+    authUser.email!,
+    authUser.user_metadata?.full_name ?? undefined
+  );
 
   const sessions = await getChatSessions(dbUser.id);
 

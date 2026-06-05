@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useDropzone } from "react-dropzone";
 import {
   Upload, FileText, CheckCircle2, AlertCircle, RefreshCw,
-  ArrowRight, Download, Info,
+  ArrowRight, Info, Landmark,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -15,12 +15,15 @@ interface ImportResult {
   recurring: number;
   anomalies: number;
   errors: string[];
+  message?: string;
+  source?: "csv" | "mock_bank";
+  account?: { name: string; balance: number };
 }
 
 export default function ImportPage() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<"csv" | "mock" | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
 
   const onDrop = useCallback((accepted: File[]) => {
@@ -39,7 +42,7 @@ export default function ImportPage() {
 
   const handleImport = async () => {
     if (!file) return;
-    setLoading(true);
+    setLoading("csv");
     try {
       const form = new FormData();
       form.append("file", file);
@@ -48,13 +51,35 @@ export default function ImportPage() {
       if (!res.ok) {
         toast.error(data.error ?? "Import failed");
       } else {
-        setResult(data);
+        setResult({ ...data, source: "csv" });
         toast.success(`Imported ${data.imported} transactions`);
       }
     } catch {
       toast.error("Network error during import");
     } finally {
-      setLoading(false);
+      setLoading(null);
+    }
+  };
+
+  const handleMockBankImport = async () => {
+    setLoading("mock");
+    setResult(null);
+    try {
+      const res = await fetch("/api/transactions/mock-bank-import", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Mock bank import failed");
+      } else if (data.imported === 0) {
+        setResult({ ...data, source: "mock_bank" });
+        toast.info(data.message ?? "Mock bank already connected");
+      } else {
+        setResult({ ...data, source: "mock_bank" });
+        toast.success(`Connected mock bank — imported ${data.imported} transactions`);
+      }
+    } catch {
+      toast.error("Network error connecting mock bank");
+    } finally {
+      setLoading(null);
     }
   };
 
@@ -116,7 +141,7 @@ export default function ImportPage() {
       <div>
         <h1 className="text-2xl font-bold text-white">Import Transactions</h1>
         <p className="mt-1 text-sm" style={{ color: "var(--fin-text-2)" }}>
-          Upload a CSV from your bank. We handle most formats automatically.
+          Upload a CSV from your bank, or connect the mock bank endpoint to pull live sample data.
         </p>
       </div>
 
@@ -137,6 +162,44 @@ export default function ImportPage() {
           </button>{" "}
           to try it out.
         </p>
+      </div>
+
+      {/* Mock bank connect */}
+      <div
+        className="rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+        style={{ background: "var(--fin-card)", border: "1px solid var(--fin-border)" }}
+      >
+        <div
+          className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: "rgba(99,102,241,0.12)" }}
+        >
+          <Landmark className="w-6 h-6" style={{ color: "var(--fin-accent-2)" }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-white text-sm">Connect Mock Bank</p>
+          <p className="text-xs mt-1" style={{ color: "var(--fin-text-2)" }}>
+            Pulls recent transactions from <code className="text-[11px]">GET /api/mock-bank</code> and saves them to your account.
+            Safe to click again — duplicates are skipped.
+          </p>
+        </div>
+        <button
+          onClick={handleMockBankImport}
+          disabled={loading !== null}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-60 flex-shrink-0"
+          style={{ background: "var(--fin-accent-2)", color: "#fff" }}
+        >
+          {loading === "mock" ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              Connecting…
+            </>
+          ) : (
+            <>
+              <Landmark className="w-4 h-4" />
+              Connect mock bank
+            </>
+          )}
+        </button>
       </div>
 
       {/* Drop zone */}
@@ -201,11 +264,11 @@ export default function ImportPage() {
       {file && !result && (
         <button
           onClick={handleImport}
-          disabled={loading}
+          disabled={loading !== null}
           className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-60"
           style={{ background: "var(--fin-accent)", color: "#fff" }}
         >
-          {loading ? (
+          {loading === "csv" ? (
             <>
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               Processing…
@@ -227,8 +290,20 @@ export default function ImportPage() {
         >
           <div className="flex items-center gap-3">
             <CheckCircle2 className="w-6 h-6" style={{ color: "var(--fin-accent)" }} />
-            <h3 className="font-semibold text-white text-lg">Import complete</h3>
+            <h3 className="font-semibold text-white text-lg">
+              {result.source === "mock_bank" ? "Mock bank connected" : "Import complete"}
+            </h3>
           </div>
+
+          {result.message && (
+            <p className="text-sm" style={{ color: "var(--fin-text-2)" }}>{result.message}</p>
+          )}
+
+          {result.account && (
+            <p className="text-xs" style={{ color: "var(--fin-muted)" }}>
+              {result.account.name} · balance ${result.account.balance.toLocaleString()}
+            </p>
+          )}
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
@@ -248,7 +323,7 @@ export default function ImportPage() {
             ))}
           </div>
 
-          {result.errors.length > 0 && (
+          {result.errors?.length > 0 && (
             <div
               className="rounded-lg p-3 text-xs space-y-1"
               style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
@@ -265,7 +340,7 @@ export default function ImportPage() {
 
           <div className="flex gap-3 pt-1">
             <button
-              onClick={() => { setFile(null); setResult(null); }}
+              onClick={() => { setFile(null); setResult(null); setLoading(null); }}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all"
               style={{ background: "var(--fin-card-2)", color: "var(--fin-text-2)", border: "1px solid var(--fin-border)" }}
             >

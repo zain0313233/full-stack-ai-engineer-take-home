@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { ensureDbUser } from "@/lib/db/users";
 import { getCategoryTotals, getTransactions, getTransactionCount, getRecurringTransactions } from "@/lib/db/transactions";
 import { getBudgets } from "@/lib/db/budgets";
 import { StatsCard } from "@/components/dashboard/StatsCard";
@@ -24,8 +24,11 @@ export default async function DashboardPage() {
   const { data: { user: authUser } } = await supabase.auth.getUser();
   if (!authUser) redirect("/login");
 
-  const dbUser = await getUserBySupabaseId(authUser.id);
-  if (!dbUser) redirect("/login");
+  const dbUser = await ensureDbUser(
+    authUser.id,
+    authUser.email!,
+    authUser.user_metadata?.full_name ?? undefined
+  );
 
   const now = new Date();
   const year = now.getFullYear();

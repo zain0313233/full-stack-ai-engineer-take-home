@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { upsertUser } from "@/lib/db/users";
+import { ensureDbUser } from "@/lib/db/users";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 
 export default async function Layout({ children }: { children: React.ReactNode }) {
@@ -12,7 +12,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
   if (!user) redirect("/login");
 
   // Ensure user exists in our DB
-  await upsertUser(
+  await ensureDbUser(
     user.id,
     user.email!,
     user.user_metadata?.full_name ?? undefined

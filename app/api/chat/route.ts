@@ -1,11 +1,12 @@
-import { streamText } from "ai";
+import { streamText, type CoreMessage } from "ai";
 import { createGroq } from "@ai-sdk/groq";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getUserBySupabaseId } from "@/lib/db/users";
 import { getUserMemory } from "@/lib/db/memory";
 import { appendMessage, createChatSession, updateSessionTitle } from "@/lib/db/chat";
 import { buildSystemPrompt } from "@/lib/ai/prompts";
+import { buildPrefetchContext } from "@/lib/ai/prefetch";
 import { buildTools } from "@/lib/ai/tools";
 import { getMonthName } from "@/lib/utils/formatters";
 import { prisma } from "@/lib/db/prisma";
@@ -75,11 +76,17 @@ export async function POST(req: NextRequest) {
     }
 
     const now = new Date();
+    const prefetchContext =
+      txCount > 0
+        ? await buildPrefetchContext(dbUser.id, now.getFullYear(), now.getMonth() + 1)
+        : undefined;
+
     const systemPrompt = buildSystemPrompt({
       userMemory,
       currentMonth: getMonthName(now.getMonth() + 1),
       currentYear: now.getFullYear(),
       dataContext,
+      prefetchContext,
       hasData: txCount > 0,
     });
 
@@ -96,14 +103,11 @@ export async function POST(req: NextRequest) {
 
     // ── Trim history ─────────────────────────────────────────────────────────
     const trimmed = messages.slice(-MAX_HISTORY);
-    type AiMsg =
-      | { role: "user";      content: string | Array<{ type: string; [k: string]: unknown }> }
-      | { role: "assistant"; content: string };
 
-    const aiMessages: AiMsg[] = trimmed.map((m: { role: string; content: string }, idx: number) => {
+    const aiMessages: CoreMessage[] = trimmed.map((m: { role: string; content: string }, idx: number) => {
       if (isVision && idx === trimmed.length - 1 && imageBase64) {
         return {
-          role: "user" as const,
+          role: "user",
           content: [
             { type: "text", text: m.content || "Read this receipt and log it as an expense." },
             { type: "image", image: imageBase64, mimeType: imageMimeType ?? "image/jpeg" },
@@ -114,27 +118,36 @@ export async function POST(req: NextRequest) {
     });
 
     // ── Stream ───────────────────────────────────────────────────────────────
-    const model  = isVision ? VISION_MODEL : MAIN_MODEL;
-    const tools  = buildTools(dbUser.id);
+    const model = isVision ? VISION_MODEL : MAIN_MODEL;
+    // Only lightweight tools — subscriptions/budgets/spending are pre-fetched to avoid
+    // Groq multi-step tool-call failures on the free tier.
+    const { search_web, save_user_memory } = buildTools(dbUser.id);
+    const lightTools = { search_web, save_user_memory };
 
     const result = streamText({
       model,
       system: systemPrompt,
       messages: aiMessages,
-      tools: isVision ? undefined : tools,
-      maxSteps: 3,
+      tools: isVision ? undefined : lightTools,
+      maxSteps: 2,
       maxTokens: 450,
       temperature: 0,
-      onFinish: async ({ text }) => {
-        if (text) await appendMessage(sessionId, "assistant", text, { model: model.modelId });
+      onFinish: async ({ text, finishReason }) => {
+        if (text?.trim()) {
+          await appendMessage(sessionId, "assistant", text, { model: model.modelId, finishReason });
+        }
       },
     });
 
     return result.toDataStreamResponse({
       headers: { "X-Session-Id": sessionId },
+      getErrorMessage: (error) => {
+        console.error("[chat stream]", error);
+        return "Something went wrong. Please try again.";
+      },
     });
   } catch (err) {
     console.error("[chat]", err);
-    return new Response("Internal server error", { status: 500 });
+    return NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
   }
 }

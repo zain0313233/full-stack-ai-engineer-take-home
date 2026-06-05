@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { getUserBySupabaseId } from "@/lib/db/users";
+import { ensureDbUser } from "@/lib/db/users";
 import { getTransactions, getTransactionCount } from "@/lib/db/transactions";
 import { formatCurrency, formatDate, CATEGORY_COLORS } from "@/lib/utils/formatters";
 import { Upload, RefreshCw, AlertTriangle } from "lucide-react";
@@ -15,8 +15,11 @@ export default async function TransactionsPage({
   const { data: { user: authUser } } = await supabase.auth.getUser();
   if (!authUser) redirect("/login");
 
-  const dbUser = await getUserBySupabaseId(authUser.id);
-  if (!dbUser) redirect("/login");
+  const dbUser = await ensureDbUser(
+    authUser.id,
+    authUser.email!,
+    authUser.user_metadata?.full_name ?? undefined
+  );
 
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page ?? "1"));

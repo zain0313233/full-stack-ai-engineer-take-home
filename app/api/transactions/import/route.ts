@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { getUserBySupabaseId } from "@/lib/db/users";
-import { createTransactionsBatch, upsertSpendingSummary } from "@/lib/db/transactions";
 import { parseCSV } from "@/lib/utils/csv-parser";
-import { detectRecurring, detectAnomalies } from "@/lib/utils/transaction-analysis";
+import { importTransactionsForUser } from "@/lib/utils/import-pipeline";
 
 const BUCKET = "Personal Finance Assistant-buck";
 
@@ -62,40 +61,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No valid transactions found", details: errors }, { status: 422 });
     }
 
-    // Detect recurring and anomalous transactions
-    const withFlags = detectRecurring(transactions);
-    const withAnomalies = detectAnomalies(withFlags);
-
-    // Batch insert
-    await createTransactionsBatch(dbUser.id, withAnomalies);
-
-    // Rebuild spending summaries per (year, month, category)
-    const summaryMap = new Map<string, { total: number; count: number }>();
-    for (const tx of withAnomalies) {
-      const key = `${tx.date.getFullYear()}|${tx.date.getMonth() + 1}|${tx.category}`;
-      const existing = summaryMap.get(key) ?? { total: 0, count: 0 };
-      summaryMap.set(key, { total: existing.total + tx.amount, count: existing.count + 1 });
-    }
-
-    await Promise.all(
-      Array.from(summaryMap.entries()).map(([key, { total, count }]) => {
-        const [year, month, category] = key.split("|");
-        return upsertSpendingSummary(
-          dbUser.id,
-          parseInt(year),
-          parseInt(month),
-          category,
-          total,
-          count
-        );
-      })
-    );
+    const result = await importTransactionsForUser(dbUser.id, transactions);
 
     return NextResponse.json({
-      imported: withAnomalies.length,
-      skipped,
-      recurring: withAnomalies.filter((t) => t.isRecurring).length,
-      anomalies: withAnomalies.filter((t) => t.isAnomaly).length,
+      ...result,
+      skipped: skipped + result.skipped,
       storageUrl,
       errors: errors.slice(0, 3),
     });

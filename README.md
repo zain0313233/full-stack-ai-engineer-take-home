@@ -75,7 +75,7 @@ Open [http://localhost:3000](http://localhost:3000).
 | Unknown charge lookup | ✅ Full | Tavily web search tool |
 | User memory ("I get paid on the 1st") | ✅ Full | Persisted to DB, injected into every prompt |
 | Plain English summaries | ✅ Full | Engaging, conversational responses |
-| Mock bank endpoint | ✅ Stub | `GET /api/mock-bank` returns live-dated data |
+| Mock bank import | ✅ Full | `GET /api/mock-bank` feed + Import page "Connect mock bank" button |
 | CSV stored in cloud storage | ✅ Full | Supabase Storage bucket on every import |
 | Real bank connection (Plaid) | ❌ Skipped | Time constraint — mock endpoint stands in |
 | Push notifications | ❌ Skipped | Out of scope for 6-hour window |

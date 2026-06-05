@@ -97,6 +97,8 @@ export async function createTransactionsBatch(
     description?: string;
     source?: string;
     rawData?: object;
+    isRecurring?: boolean;
+    isAnomaly?: boolean;
   }>
 ) {
   return prisma.transaction.createMany({

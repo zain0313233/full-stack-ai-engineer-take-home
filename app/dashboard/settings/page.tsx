@@ -105,7 +105,7 @@ export default function SettingsPage() {
       >
         <p className="font-semibold text-white text-sm mb-2">Mock Bank Endpoint</p>
         <p className="text-xs mb-3" style={{ color: "var(--fin-text-2)" }}>
-          For testing, you can fetch a pre-built transaction dataset via the mock bank API:
+          Use the <strong>Connect Mock Bank</strong> button on the Import Data page, or call the API directly:
         </p>
         <code
           className="block text-xs p-3 rounded-lg"
