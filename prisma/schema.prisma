@@ -1,0 +1,136 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id         String   @id @default(uuid())
+  supabaseId String   @unique @map("supabase_id")
+  email      String   @unique
+  name       String?
+  avatarUrl  String?  @map("avatar_url")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  transactions      Transaction[]
+  budgets           Budget[]
+  chatSessions      ChatSession[]
+  userMemory        UserMemory[]
+  spendingSummaries SpendingSummary[]
+
+  @@map("users")
+}
+
+// ─── Financial Data ────────────────────────────────────────────────────────────
+
+model Transaction {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  date        DateTime
+  merchant    String
+  amount      Float
+  category    String
+  description String?
+  isRecurring Boolean  @default(false) @map("is_recurring")
+  isAnomaly   Boolean  @default(false) @map("is_anomaly")
+  // "csv" | "receipt" | "manual" | "mock_bank"
+  source      String   @default("csv")
+  // raw row from CSV or receipt OCR result
+  rawData     Json?    @map("raw_data")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([userId, category])
+  @@index([userId, isRecurring])
+  @@map("transactions")
+}
+
+// Pre-aggregated monthly summaries — avoids scanning all rows for common queries.
+// Updated whenever transactions are imported or modified.
+model SpendingSummary {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  year      Int
+  month     Int
+  category  String
+  total     Float    @default(0)
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, month, category])
+  @@index([userId, year, month])
+  @@map("spending_summaries")
+}
+
+model Budget {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  category  String
+  amount    Float
+  // "monthly" | "weekly"
+  period    String   @default("monthly")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category])
+  @@map("budgets")
+}
+
+// ─── Chat ──────────────────────────────────────────────────────────────────────
+
+model ChatSession {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([userId])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  role      String
+  content   String   @db.Text
+  // stores tool call results, image refs, routing metadata
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("chat_messages")
+}
+
+// ─── User Memory ───────────────────────────────────────────────────────────────
+// Persistent facts the assistant learns from the user.
+// e.g. key="pay_date" value="1st of each month"
+//      key="exclude_categories" value='["rent"]'
+model UserMemory {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  key       String
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("user_memory")
+}

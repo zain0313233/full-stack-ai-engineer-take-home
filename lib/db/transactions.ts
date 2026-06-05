@@ -1,0 +1,106 @@
+import { prisma } from "./prisma";
+
+export type TransactionFilter = {
+  userId: string;
+  category?: string;
+  startDate?: Date;
+  endDate?: Date;
+  limit?: number;
+  offset?: number;
+};
+
+export async function getTransactions(filter: TransactionFilter) {
+  const { userId, category, startDate, endDate, limit = 50, offset = 0 } = filter;
+
+  return prisma.transaction.findMany({
+    where: {
+      userId,
+      ...(category && { category }),
+      ...(startDate || endDate
+        ? {
+            date: {
+              ...(startDate && { gte: startDate }),
+              ...(endDate && { lte: endDate }),
+            },
+          }
+        : {}),
+    },
+    orderBy: { date: "desc" },
+    take: limit,
+    skip: offset,
+  });
+}
+
+export async function getTransactionCount(userId: string) {
+  return prisma.transaction.count({ where: { userId } });
+}
+
+export async function getRecurringTransactions(userId: string) {
+  return prisma.transaction.findMany({
+    where: { userId, isRecurring: true },
+    orderBy: { amount: "desc" },
+  });
+}
+
+export async function getAnomalousTransactions(userId: string, limit = 10) {
+  return prisma.transaction.findMany({
+    where: { userId, isAnomaly: true },
+    orderBy: { date: "desc" },
+    take: limit,
+  });
+}
+
+export async function upsertSpendingSummary(
+  userId: string,
+  year: number,
+  month: number,
+  category: string,
+  total: number,
+  count: number
+) {
+  return prisma.spendingSummary.upsert({
+    where: { userId_year_month_category: { userId, year, month, category } },
+    create: { userId, year, month, category, total, count },
+    update: { total, count },
+  });
+}
+
+export async function getSpendingSummaries(
+  userId: string,
+  year?: number,
+  month?: number
+) {
+  return prisma.spendingSummary.findMany({
+    where: {
+      userId,
+      ...(year !== undefined && { year }),
+      ...(month !== undefined && { month }),
+    },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+}
+
+export async function getCategoryTotals(userId: string, year: number, month: number) {
+  return prisma.spendingSummary.findMany({
+    where: { userId, year, month },
+    orderBy: { total: "desc" },
+  });
+}
+
+export async function createTransactionsBatch(
+  userId: string,
+  rows: Array<{
+    date: Date;
+    merchant: string;
+    amount: number;
+    category: string;
+    description?: string;
+    source?: string;
+    rawData?: object;
+  }>
+) {
+  return prisma.transaction.createMany({
+    data: rows.map((r) => ({ ...r, userId })),
+    skipDuplicates: false,
+  });
+}
