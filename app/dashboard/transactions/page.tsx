@@ -2,14 +2,22 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { ensureDbUser } from "@/lib/db/users";
-import { getTransactions, getTransactionCount } from "@/lib/db/transactions";
+import { countTransactions, getTransactions, getTransactionCount } from "@/lib/db/transactions";
 import { formatCurrency, formatDate, CATEGORY_COLORS } from "@/lib/utils/formatters";
 import { Upload, RefreshCw, AlertTriangle } from "lucide-react";
+import { TransactionFilters } from "@/components/transactions/TransactionFilters";
+import {
+  buildTransactionsHref,
+  hasActiveFilters,
+  parseTransactionQuery,
+  TRANSACTIONS_PAGE_SIZE,
+  type TransactionQueryParams,
+} from "@/lib/transactions/filters";
 
 export default async function TransactionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string; category?: string }>;
+  searchParams: Promise<TransactionQueryParams>;
 }) {
   const supabase = await createClient();
   const { data: { user: authUser } } = await supabase.auth.getUser();
@@ -22,21 +30,30 @@ export default async function TransactionsPage({
   );
 
   const params = await searchParams;
-  const page = Math.max(1, parseInt(params.page ?? "1"));
-  const category = params.category;
-  const PAGE_SIZE = 30;
+  let query = parseTransactionQuery(dbUser.id, params);
 
-  const [transactions, totalCount] = await Promise.all([
-    getTransactions({
-      userId: dbUser.id,
-      category: category || undefined,
-      limit: PAGE_SIZE,
-      offset: (page - 1) * PAGE_SIZE,
-    }),
+  const [filteredCount, totalCount] = await Promise.all([
+    countTransactions(query),
     getTransactionCount(dbUser.id),
   ]);
 
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filteredCount / TRANSACTIONS_PAGE_SIZE));
+  const page = Math.min(query.page, totalPages);
+
+  if (query.page > totalPages && filteredCount > 0) {
+    redirect(buildTransactionsHref(params, { page: String(totalPages) }));
+  }
+
+  if (query.page !== page) {
+    query = {
+      ...query,
+      page,
+      offset: (page - 1) * TRANSACTIONS_PAGE_SIZE,
+    };
+  }
+
+  const transactions = await getTransactions(query);
+  const filtersActive = hasActiveFilters(params);
 
   return (
     <div className="space-y-6">
@@ -44,7 +61,7 @@ export default async function TransactionsPage({
         <div>
           <h1 className="text-2xl font-bold text-white">Transactions</h1>
           <p className="text-sm mt-0.5" style={{ color: "var(--fin-text-2)" }}>
-            {totalCount.toLocaleString()} total transactions
+            {totalCount.toLocaleString()} total transactions · {TRANSACTIONS_PAGE_SIZE} per page
           </p>
         </div>
         <Link
@@ -57,23 +74,45 @@ export default async function TransactionsPage({
         </Link>
       </div>
 
+      {totalCount > 0 && (
+        <TransactionFilters
+          params={params}
+          filteredCount={filteredCount}
+          totalCount={totalCount}
+        />
+      )}
+
       {transactions.length === 0 ? (
         <div
           className="rounded-2xl p-12 text-center"
           style={{ background: "var(--fin-card)", border: "1px solid var(--fin-border)" }}
         >
           <Upload className="w-10 h-10 mx-auto mb-3" style={{ color: "var(--fin-muted)" }} />
-          <p className="text-white font-medium mb-1">No transactions yet</p>
-          <p className="text-sm mb-4" style={{ color: "var(--fin-muted)" }}>
-            Import a CSV file to get started
+          <p className="text-white font-medium mb-1">
+            {filtersActive ? "No transactions match your filters" : "No transactions yet"}
           </p>
-          <Link
-            href="/dashboard/import"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium"
-            style={{ background: "var(--fin-accent)", color: "#fff" }}
-          >
-            Import now
-          </Link>
+          <p className="text-sm mb-4" style={{ color: "var(--fin-muted)" }}>
+            {filtersActive
+              ? "Try adjusting or clearing your filters"
+              : "Import a CSV file to get started"}
+          </p>
+          {filtersActive ? (
+            <Link
+              href="/dashboard/transactions"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium"
+              style={{ background: "var(--fin-card-2)", color: "var(--fin-text)" }}
+            >
+              Clear filters
+            </Link>
+          ) : (
+            <Link
+              href="/dashboard/import"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium"
+              style={{ background: "var(--fin-accent)", color: "#fff" }}
+            >
+              Import now
+            </Link>
+          )}
         </div>
       ) : (
         <div
@@ -130,7 +169,15 @@ export default async function TransactionsPage({
                       {formatCurrency(tx.amount)}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-1.5">
+                      <div className="flex gap-1.5 flex-wrap">
+                        {tx.source === "receipt" && (
+                          <span
+                            className="text-[11px] px-1.5 py-0.5 rounded-full"
+                            style={{ background: "rgba(16,185,129,0.12)", color: "var(--fin-accent)" }}
+                          >
+                            receipt
+                          </span>
+                        )}
                         {tx.isRecurring && (
                           <span
                             className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full"
@@ -157,19 +204,19 @@ export default async function TransactionsPage({
             </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div
               className="flex items-center justify-between px-4 py-3"
               style={{ borderTop: "1px solid var(--fin-border)" }}
             >
               <p className="text-xs" style={{ color: "var(--fin-muted)" }}>
-                Page {page} of {totalPages}
+                Page {page} of {totalPages} · {filteredCount.toLocaleString()} result
+                {filteredCount !== 1 ? "s" : ""}
               </p>
               <div className="flex gap-2">
                 {page > 1 && (
                   <Link
-                    href={`/dashboard/transactions?page=${page - 1}`}
+                    href={buildTransactionsHref(params, { page: String(page - 1) })}
                     className="px-3 py-1.5 rounded-lg text-xs font-medium"
                     style={{ background: "var(--fin-card-2)", color: "var(--fin-text-2)" }}
                   >
@@ -178,7 +225,7 @@ export default async function TransactionsPage({
                 )}
                 {page < totalPages && (
                   <Link
-                    href={`/dashboard/transactions?page=${page + 1}`}
+                    href={buildTransactionsHref(params, { page: String(page + 1) })}
                     className="px-3 py-1.5 rounded-lg text-xs font-medium"
                     style={{ background: "var(--fin-accent)", color: "#fff" }}
                   >

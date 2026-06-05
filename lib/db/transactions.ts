@@ -1,38 +1,68 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
 export type TransactionFilter = {
   userId: string;
   category?: string;
+  merchant?: string;
+  source?: string;
+  isRecurring?: boolean;
+  isAnomaly?: boolean;
   startDate?: Date;
   endDate?: Date;
   limit?: number;
   offset?: number;
 };
 
+export function buildTransactionWhere(
+  filter: Omit<TransactionFilter, "limit" | "offset">
+): Prisma.TransactionWhereInput {
+  const {
+    userId,
+    category,
+    merchant,
+    source,
+    isRecurring,
+    isAnomaly,
+    startDate,
+    endDate,
+  } = filter;
+
+  return {
+    userId,
+    ...(category && { category }),
+    ...(merchant && { merchant: { contains: merchant, mode: "insensitive" } }),
+    ...(source && { source }),
+    ...(isRecurring !== undefined && { isRecurring }),
+    ...(isAnomaly !== undefined && { isAnomaly }),
+    ...(startDate || endDate
+      ? {
+          date: {
+            ...(startDate && { gte: startDate }),
+            ...(endDate && { lte: endDate }),
+          },
+        }
+      : {}),
+  };
+}
+
 export async function getTransactions(filter: TransactionFilter) {
-  const { userId, category, startDate, endDate, limit = 50, offset = 0 } = filter;
+  const { limit = 50, offset = 0, ...rest } = filter;
 
   return prisma.transaction.findMany({
-    where: {
-      userId,
-      ...(category && { category }),
-      ...(startDate || endDate
-        ? {
-            date: {
-              ...(startDate && { gte: startDate }),
-              ...(endDate && { lte: endDate }),
-            },
-          }
-        : {}),
-    },
+    where: buildTransactionWhere(rest),
     orderBy: { date: "desc" },
     take: limit,
     skip: offset,
   });
 }
 
+export async function countTransactions(filter: Omit<TransactionFilter, "limit" | "offset">) {
+  return prisma.transaction.count({ where: buildTransactionWhere(filter) });
+}
+
 export async function getTransactionCount(userId: string) {
-  return prisma.transaction.count({ where: { userId } });
+  return countTransactions({ userId });
 }
 
 export async function getRecurringTransactions(userId: string) {
